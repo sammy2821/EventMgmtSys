@@ -1,6 +1,7 @@
 from django.contrib.auth.models import User
+from rest_framework.exceptions import ValidationError
 from rest_framework import serializers
-from .models import Event
+from .models import Event, EventPermission
 
 class UserRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -16,9 +17,35 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         )
         return user
 
-
 class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = '__all__'
         read_only_fields = ['created_by', 'created_at', 'updated_at']
+            
+class EventShareSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    role = serializers.ChoiceField(choices=EventPermission.ROLE_CHOICES)
+
+    def validate_user_id(self, value):
+        if not User.objects.filter(id=value).exists():
+            raise ValidationError("User with this ID does not exist.")
+        return value
+
+    def create(self, validated_data):
+        event = self.context['event']
+        user = User.objects.get(id=validated_data['user_id'])
+
+        permission, created = EventPermission.objects.update_or_create(
+            user=user,
+            event=event,
+            defaults={'role': validated_data['role']}
+        )
+        return permission
+    
+class EventPermissionSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = EventPermission
+        fields = ['user_id', 'username', 'role']
