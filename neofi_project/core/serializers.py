@@ -1,7 +1,7 @@
 from django.contrib.auth.models import User
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework import serializers
-from .models import Event, EventPermission
+from .models import *
 
 class UserRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -49,3 +49,18 @@ class EventPermissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventPermission
         fields = ['user_id', 'username', 'role']
+    
+class EventVersionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventVersion
+        fields = ['id', 'version_number', 'data', 'created_at']
+
+
+class EventRollbackSerializer(serializers.Serializer):
+    version_id = serializers.IntegerField()
+
+    def validate_version_id(self, value):
+        event = self.context.get('event')
+        if not EventVersion.objects.filter(event=event, id=value).exists():
+            raise serializers.ValidationError("Version does not exist for this event.")
+        return value

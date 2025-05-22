@@ -1,11 +1,11 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.views import APIView
 from .serializers import *
 from .models import Event, EventPermission
-from .utils import has_conflict
+from .utils import compute_diff, has_conflict, has_event_permission
 from django.contrib.auth.models import User
 from rest_framework.permissions import AllowAny
 
@@ -108,7 +108,7 @@ class EventPermissionUpdateView(generics.UpdateAPIView):
 
         # Only Owner can update roles
         if not EventPermission.objects.filter(user=self.request.user, event=event, role='OWNER').exists():
-            raise ValidationError("Only owners can update permissions.")
+            raise PermissionDenied("Only owners can update permissions.")
 
         return get_object_or_404(EventPermission, user_id=user_id, event=event)
 
@@ -123,6 +123,89 @@ class EventPermissionDeleteView(generics.DestroyAPIView):
 
         # Only Owner can remove users
         if not EventPermission.objects.filter(user=self.request.user, event=event, role='OWNER').exists():
-            raise ValidationError("Only owners can remove users.")
+            raise PermissionDenied("Only owners can remove users.")
 
         return get_object_or_404(EventPermission, user_id=user_id, event=event)
+    
+class EventVersionList(generics.ListAPIView):
+    serializer_class = EventVersionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        event_id = self.kwargs['id']
+        event = get_object_or_404(Event, id=event_id)
+        if not has_event_permission(self.request.user, event, ['OWNER', 'EDITOR', 'VIEWER']):
+            raise PermissionDenied("You do not have permission to view this event's versions.")
+        return EventVersion.objects.filter(event=event).order_by('-version_number')
+
+
+class EventVersionDetail(generics.RetrieveAPIView):
+    serializer_class = EventVersionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        event_id = self.kwargs['id']
+        version_id = self.kwargs['version_id']
+        event = get_object_or_404(Event, id=event_id)
+        if not has_event_permission(self.request.user, event, ['OWNER', 'EDITOR', 'VIEWER']):
+            raise PermissionDenied("You do not have permission to view this event version.")
+        version = get_object_or_404(EventVersion, id=version_id, event=event)
+        return version
+
+
+class EventRollbackView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, id, version_id):
+        event = get_object_or_404(Event, id=id)
+        if not has_event_permission(request.user, event, ['OWNER', 'EDITOR']):
+            raise PermissionDenied("You do not have permission to rollback this event.")
+
+        version = get_object_or_404(EventVersion, id=version_id, event=event)
+        # Rollback: update event fields to the version's snapshot
+        data = version.data
+        event.title = data.get('title')
+        event.description = data.get('description')
+        event.start_time = data.get('start_time')
+        event.end_time = data.get('end_time')
+        event.location = data.get('location')
+        event.is_recurring = data.get('is_recurring')
+        event.recurrence = data.get('recurrence')
+        # Note: We won't rollback created_by or timestamps
+        event.save()  # This will also create a new EventVersion per our model save override
+
+        return Response({"detail": f"Event rolled back to version {version.version_number}"}, status=status.HTTP_200_OK)
+    
+
+class EventChangeLogView(APIView):
+    def get(self, request, id):
+        event = get_object_or_404(Event, id=id)
+        if not has_event_permission(request.user, event, ['OWNER', 'EDITOR', 'VIEWER']):
+            raise PermissionDenied("You do not have permission to view this event's changelog.")
+
+        versions = EventVersion.objects.filter(event=event).order_by('version_number')
+
+        changelog = []
+        for v in versions:
+            changelog.append({
+                "version": v.version_number,
+                "changed_at": v.timestamp,
+                "changed_by": v.changed_by.username if v.changed_by else "Unknown",
+                "summary": f"Version {v.version_number} saved on {v.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+                # You can customize summary or add more metadata here
+            })
+
+        return Response(changelog)
+
+class EventDiffView(APIView):
+    def get(self, request, id, version_id1, version_id2):
+        event = get_object_or_404(Event, id=id)
+        if not has_event_permission(request.user, event, ['OWNER', 'EDITOR', 'VIEWER']):
+            raise PermissionDenied("You do not have permission to view diffs for this event.")
+
+        v1 = get_object_or_404(EventVersion, id=version_id1, event=event)
+        v2 = get_object_or_404(EventVersion, id=version_id2, event=event)
+
+        diff = compute_diff(v1.data, v2.data)
+
+        return Response(diff)

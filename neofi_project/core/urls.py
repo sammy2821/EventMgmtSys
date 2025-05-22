@@ -21,4 +21,15 @@ urlpatterns = [
     path('events/<int:pk>/permissions/', EventPermissionListView.as_view(), name='list-permissions'),
     path('events/<int:pk>/permissions/<int:user_id>/', EventPermissionUpdateView.as_view(), name='update-permission'),
     path('events/<int:pk>/permissions/<int:user_id>/', EventPermissionDeleteView.as_view(), name='remove-permission'),
+    
+    # Version history
+    path('api/events/<int:id>/history/', EventVersionList.as_view(), name='event-version-list'),
+    path('api/events/<int:id>/history/<int:version_id>/', EventVersionDetail.as_view(), name='event-version-detail'),
+
+    # Rollback
+    path('api/events/<int:id>/rollback/<int:version_id>/', EventRollbackView.as_view(), name='event-rollback'),
+    
+    path('events/<int:id>/changelog/', EventChangeLogView.as_view(), name='event-changelog'),
+    path('events/<int:id>/diff/<int:version_id1>/<int:version_id2>/', EventDiffView.as_view(), name='event-diff'),
 ]
+
